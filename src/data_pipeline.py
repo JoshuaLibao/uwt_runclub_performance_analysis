@@ -137,11 +137,8 @@ run_attendance_summary = pd.read_sql("""
         attendance_count_setup.attendance_count,
         attendance_count_setup.first_time_attendees,
         returning_final.returning_attendees
-    FROM runs
-    LEFT JOIN attendance_count_setup 
-        ON runs.run_id = attendance_count_setup.run_id 
-    LEFT JOIN returning_final
-        ON runs.run_id = returning_final.run_id
+    FROM attendance_count_setup
+    CROSS JOIN returning_final
 """, conn)
 
 print(run_attendance_summary)

@@ -1,14 +1,16 @@
 import pandas as pd 
 import sqlite3
 
-path = r'C:\Users\12063\Downloads\sqlite\uwt_run_club_performance_analysis\data\raw\run_club_data.xlsx'
-df = pd.read_excel(path)
+excel_path = r'C:\Users\12063\Downloads\sqlite\uwt_runclub_performance_analysis\data\raw\run_club_data.xlsx'
+db_path = r'C:\Users\12063\Downloads\sqlite\uwt_runclub_performance_analysis\data\processed\processed_data.db'
+df = pd.read_excel(excel_path)
+conn = sqlite3.connect(db_path)
 
-runs_df = pd.read_excel(path, sheet_name="runs")
-runners_df = pd.read_excel(path, sheet_name="runners")
-attendance_df = pd.read_excel(path, sheet_name="attendance")
+runs_df = pd.read_excel(excel_path, sheet_name="runs")
+runners_df = pd.read_excel(excel_path, sheet_name="runners")
+attendance_df = pd.read_excel(excel_path, sheet_name="attendance")
 
-# database schema:
+# data cleaning/validation:
 # runner_id = int
 # run_id = int 
 # route = str
@@ -20,61 +22,130 @@ runs_df['run_date'] = pd.to_datetime(
     errors="coerce"
 )
 
-def empty_column_check():
-
-    f"{table}[{column_name}].isna().sum()"
 missing_counts = {
-empty_runner_id_1 = runners_df['runner_id'].isna().sum()
-empty_runner_name = runners_df['runner_name'].isna().sum()
-empty_run_id_1 = attendance_df['run_id'].isna().sum()
-empty_runner_id_2 = attendance_df['runner_id'].isna().sum()
-empty_first_time = attendance_df['first_time'].isna().sum()
-empty_run_id_2 = runs_df['run_id'].isna().sum()
-empty_route = runs_df['route'].isna().sum()
-empty_run_date = runs_df['run_date'].isna().sum()
-empty_distance_miles = runs_df['distance_miles'].isna().sum()
+"runners_runner_id":runners_df['runner_id'].isna().sum(),
+"runners_runner_name":runners_df['runner_name'].isna().sum(),
+"attendance_run_id":attendance_df['run_id'].isna().sum(),
+"attendance_runner_id":attendance_df['runner_id'].isna().sum(),
+"attendance_first_time":attendance_df['first_time'].isna().sum(),
+"runs_run_id":runs_df['run_id'].isna().sum(),
+"runs_route":runs_df['route'].isna().sum(),
+"runs_run_date":runs_df['run_date'].isna().sum(),
+"runs_distance_miles":runs_df['distance_miles'].isna().sum()
+}
 
-if empty_run_id_1 > 0:
-    print(f"runner_id from the runners table failed! {empty_run_id_1} missing values detected")
-if empty_runner_name > 0:
-    print(f"runner_name from the runners table failed! {empty_runner_name} missing values detected")
-if empty_run_id_1 > 0:
-    print(f"empty_run_id from the attendance table failed! {empty_run_id_1} missing valued detected")
-if empty_runner_id_2 > 0:
-    print(f"runner_id from the attendance table failed! {empty_runner_id_2} missing values detected")
-else:
-    print("runner_id passed!")
+for column, count in missing_counts.items():
+    if count > 0:
+        print(
+            f"{column} failed validation! "
+            f"{count} missing values detected."
+        )
+    else:
+        print(f"{column} success")
 
-# runs_df = runs_df[
-#     (runs_df['run_id'].dtypes == int) and
-#     (runs_df['route'].dtypes == str) and
-#     (runs_df['distance_miles'].dtypes == float)
-# ]
+runs_df = runs_df.astype({'run_id':int, 'route':str, 'distance_miles':float})
+attendance_df = attendance_df.astype({'run_id':int, 'runner_id':int, "first_time":int})
+runners_df = runners_df.astype({'runner_id':int, 'runner_name':str})
 
-# attendance_df = attendance_df[
-#     (attendance_df['run_df'].dtypes == int) and
-#     (attendance_df['runner_id'].dtypes == int) and
-#     (attendance_df['first_time'].dtypes == int)
-# ]
+runs_df = runs_df[
+    (runs_df['distance_miles'] > 0)
+]
+attendance_df = attendance_df[
+    ((attendance_df['first_time'] == 0) |
+    (attendance_df['first_time'] == 1)) 
+]
 
-# runners_df = runners_df[
-#     (runners_df['runner_id'].dtypes == int) and
-#     (runners_df['runner_name'].dtypes == str)
-# ]
+runs_df.to_sql("runs", conn, if_exists="replace", index=False)
+runners_df.to_sql("runners", conn, if_exists="replace", index=False)
+attendance_df.to_sql("attendance", conn, if_exists="replace", index=False)
 
-# data cleaning/validation:
-# distance_miles data entry is > 0 
-# first_time data entry is, >= 0 but <= 1
-# runs_df = runs_df[
-#     (runs_df['distance_miles'] > 0) and
-#     ((runs_df['first_time'] == 0) or
-#     (runs_df['first_time'] == 1)) 
-#     ]
+# combine runs and attendance tables: date, route, attendance count, returning attendees(0/1)
+# attendance_count -> engineers attendance_count column
+# most_recent_run -> engineers last_run_date column
+# returning_raw -> engineers first_run_date column and returning cutoff column
+# # final table puts everything together
 
-# print(runs_df)
-# print(runners_df)
-# print(attendance_df)
+run_attendance_summary = pd.read_sql("""
+    WITH
+    attendance_count_setup AS (
+        SELECT
+            run_id,
+            SUM(run_id) AS attendance_count,
+            SUM(first_time) AS first_time_attendees
+        FROM attendance
+    ),
+    first_run_date_setup AS (
+        SELECT 
+            attendance.runner_id,
+            attendance.run_id,
+            MIN(runs.run_date) AS first_run_date
+        FROM attendance
+        JOIN runs 
+            ON runs.run_id = attendance.run_id
+        GROUP BY attendance.runner_id
+    ),
+    first_run_date_final AS (
+        SELECT 
+            first_run_date_setup.run_id,
+            first_run_date_setup.runner_id,
+            first_run_date_setup.first_run_date
+        FROM first_run_date_setup
+        JOIN runners
+            ON first_run_date_setup.runner_id = runners.runner_id
+    ),
+    returning_cutoff_setup AS (
+        SELECT 
+            first_run_date_setup.run_id,
+            date(first_run_date_setup.first_run_date, '+30 days') AS returning_cutoff
+        FROM first_run_date_setup
+        JOIN runners
+            ON first_run_date_setup.runner_id = runners.runner_id
+    ),
+    last_run_date_setup AS (
+        SELECT 
+            attendance.runner_id AS runner_id,
+            MAX(runs.run_date) AS last_run_date
+        FROM runs
+        JOIN attendance 
+            ON runs.run_id = attendance.run_id
+        GROUP BY attendance.runner_id
+    ),
+    last_run_date_final AS (
+        SELECT
+            last_run_date_setup.runner_id AS runner_id,
+            last_run_date_setup.last_run_date AS last_run_date,
+            attendance.run_id AS run_id
+        FROM last_run_date_setup
+        JOIN attendance 
+            ON attendance.runner_id = last_run_date_setup.runner_id
+    ),
+    returning_setup AS (
+        SELECT 
+            returning_cutoff_setup.run_id AS run_id,
+            CASE WHEN last_run_date_final.last_run_date < returning_cutoff_setup.returning_cutoff THEN 1 else 0 END AS is_returning
+        from last_run_date_final
+        JOIN returning_cutoff_setup 
+            ON last_run_date_final.run_id = returning_cutoff_setup.run_id
+    ),
+    returning_final AS (
+        SELECT 
+            run_id,
+            COUNT(is_returning) AS returning_attendees
+        FROM returning_setup
+    )
+    SELECT 
+        attendance_count_setup.attendance_count,
+        attendance_count_setup.first_time_attendees,
+        returning_final.returning_attendees
+    FROM runs
+    LEFT JOIN attendance_count_setup 
+        ON runs.run_id = attendance_count_setup.run_id 
+    LEFT JOIN returning_final
+        ON runs.run_id = returning_final.run_id
+""", conn)
 
-# print(runs_df.dtypes)
-# print(runners_df.dtypes)
-# print(attendance_df.dtypes)
+print(run_attendance_summary)
+run_attendance_summary.to_sql("run_attendance_summary", conn, if_exists='replace',index=False)
+
+conn.commit()
+conn.close()

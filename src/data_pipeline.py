@@ -126,9 +126,19 @@ run_attendance_summary = pd.read_sql("""
         ON runs.run_id = returning_final.run_id
 """, conn)
 
-
-print(run_attendance_summary)
 run_attendance_summary.to_sql("run_attendance_summary", conn, if_exists='replace',index=False)
+
+weekly_club_metrics = pd.read_sql("""
+    SELECT 
+        strftime('%Y-%W', run_date) AS week,
+        SUM(attendance_count) AS total_attendance,
+        SUM(first_time_attendees) AS total_first_time_attendees,
+        SUM(returning_attendees) AS total_returning_attendees
+    FROM run_attendance_summary
+    GROUP BY strftime('%Y-%W', run_date)
+""", conn)
+
+weekly_club_metrics.to_sql("weekly_club_metrics", conn, if_exists='replace',index=False)
 
 conn.commit()
 conn.close()

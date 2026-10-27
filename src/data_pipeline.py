@@ -140,5 +140,50 @@ weekly_club_metrics = pd.read_sql("""
 
 weekly_club_metrics.to_sql("weekly_club_metrics", conn, if_exists='replace',index=False)
 
+runner_engagement = pd.read_sql("""
+    WITH
+    attendance_count_setup AS (
+        SELECT
+            runner_id,
+            COUNT(*) AS attendance_count,
+            SUM(first_time) AS first_time_attendance_count
+        FROM attendance
+        GROUP BY runner_id
+    ),
+    first_run_date_final AS (
+        SELECT
+            attendance.runner_id AS runner_id,
+            MIN(runs.run_date) AS first_run_date
+        FROM attendance
+        JOIN runs
+            ON runs.run_id = attendance.run_id
+        GROUP BY attendance.runner_id
+    ),
+    most_recent_run_date_final AS (
+        SELECT
+            attendance.runner_id AS runner_id,
+            MAX(runs.run_date) AS most_recent_run_date
+        FROM attendance
+        JOIN runs
+            ON runs.run_id = attendance.run_id
+        GROUP BY attendance.runner_id
+    )
+    SELECT
+        runners.runner_id AS runner_id,
+        runners.runner_name AS runner_name,
+        COALESCE(attendance_count_setup.attendance_count, 0) AS attendance_count,
+        first_run_date_final.first_run_date AS first_run_date,
+        most_recent_run_date_final.most_recent_run_date AS most_recent_run_date
+    FROM runners
+    LEFT JOIN attendance_count_setup
+        ON runners.runner_id = attendance_count_setup.runner_id
+    LEFT JOIN first_run_date_final
+        ON runners.runner_id = first_run_date_final.runner_id
+    LEFT JOIN most_recent_run_date_final
+        ON runners.runner_id = most_recent_run_date_final.runner_id
+""", conn)
+
+runner_engagement.to_sql("runner_engagement", conn, if_exists='replace',index=False)
+
 conn.commit()
 conn.close()

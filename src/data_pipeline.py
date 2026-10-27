@@ -59,87 +59,73 @@ runs_df.to_sql("runs", conn, if_exists="replace", index=False)
 runners_df.to_sql("runners", conn, if_exists="replace", index=False)
 attendance_df.to_sql("attendance", conn, if_exists="replace", index=False)
 
-# combine runs and attendance tables: date, route, attendance count, returning attendees(0/1)
-# attendance_count -> engineers attendance_count column
-# most_recent_run -> engineers last_run_date column
-# returning_raw -> engineers first_run_date column and returning cutoff column
-# # final table puts everything together
-
 run_attendance_summary = pd.read_sql("""
     WITH
     attendance_count_setup AS (
         SELECT
             run_id,
-            SUM(run_id) AS attendance_count,
+            COUNT(*) AS attendance_count,
             SUM(first_time) AS first_time_attendees
         FROM attendance
+        GROUP BY run_id
     ),
-    first_run_date_setup AS (
-        SELECT 
-            attendance.runner_id,
-            attendance.run_id,
+
+    first_run_date_final AS (
+        SELECT
+            attendance.runner_id AS runner_id,
             MIN(runs.run_date) AS first_run_date
         FROM attendance
-        JOIN runs 
+        JOIN runs
             ON runs.run_id = attendance.run_id
         GROUP BY attendance.runner_id
     ),
-    first_run_date_final AS (
-        SELECT 
-            first_run_date_setup.run_id,
-            first_run_date_setup.runner_id,
-            first_run_date_setup.first_run_date
-        FROM first_run_date_setup
-        JOIN runners
-            ON first_run_date_setup.runner_id = runners.runner_id
-    ),
-    returning_cutoff_setup AS (
-        SELECT 
-            first_run_date_setup.run_id,
-            date(first_run_date_setup.first_run_date, '+30 days') AS returning_cutoff
-        FROM first_run_date_setup
-        JOIN runners
-            ON first_run_date_setup.runner_id = runners.runner_id
-    ),
-    last_run_date_setup AS (
-        SELECT 
-            attendance.runner_id AS runner_id,
-            MAX(runs.run_date) AS last_run_date
-        FROM runs
-        JOIN attendance 
-            ON runs.run_id = attendance.run_id
-        GROUP BY attendance.runner_id
-    ),
-    last_run_date_final AS (
+
+    runs_v2 AS (
         SELECT
-            last_run_date_setup.runner_id AS runner_id,
-            last_run_date_setup.last_run_date AS last_run_date,
-            attendance.run_id AS run_id
-        FROM last_run_date_setup
-        JOIN attendance 
-            ON attendance.runner_id = last_run_date_setup.runner_id
+            runs.run_id AS run_id,
+            runs.run_date AS run_date,
+            attendance.runner_id AS runner_id,
+            attendance.first_time AS first_time
+        FROM runs
+        JOIN attendance
+            ON runs.run_id = attendance.run_id
     ),
+
     returning_setup AS (
-        SELECT 
-            returning_cutoff_setup.run_id AS run_id,
-            CASE WHEN last_run_date_final.last_run_date < returning_cutoff_setup.returning_cutoff THEN 1 else 0 END AS is_returning
-        from last_run_date_final
-        JOIN returning_cutoff_setup 
-            ON last_run_date_final.run_id = returning_cutoff_setup.run_id
+        SELECT
+            runs_v2.run_id AS run_id,
+            runs_v2.runner_id AS runner_id,
+            CASE
+                WHEN first_run_date_final.first_run_date < runs_v2.run_date
+                THEN 1
+                ELSE 0
+            END AS is_returning
+        FROM runs_v2
+        JOIN first_run_date_final
+            ON runs_v2.runner_id = first_run_date_final.runner_id
     ),
+
     returning_final AS (
-        SELECT 
+        SELECT
             run_id,
-            COUNT(is_returning) AS returning_attendees
+            SUM(is_returning) AS returning_attendees
         FROM returning_setup
+        GROUP BY run_id
     )
-    SELECT 
-        attendance_count_setup.attendance_count,
-        attendance_count_setup.first_time_attendees,
-        returning_final.returning_attendees
-    FROM attendance_count_setup
-    CROSS JOIN returning_final
+
+    SELECT
+        runs.run_id AS run_id,
+        runs.run_date AS run_date,
+        COALESCE(attendance_count_setup.attendance_count, 0) AS attendance_count,
+        COALESCE(attendance_count_setup.first_time_attendees, 0) AS first_time_attendees,
+        COALESCE(returning_final.returning_attendees, 0) AS returning_attendees
+    FROM runs
+    LEFT JOIN attendance_count_setup
+        ON runs.run_id = attendance_count_setup.run_id
+    LEFT JOIN returning_final
+        ON runs.run_id = returning_final.run_id
 """, conn)
+
 
 print(run_attendance_summary)
 run_attendance_summary.to_sql("run_attendance_summary", conn, if_exists='replace',index=False)

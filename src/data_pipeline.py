@@ -150,15 +150,26 @@ runner_engagement = pd.read_sql("""
         FROM attendance
         GROUP BY runner_id
     ),
+
     first_run_date_final AS (
         SELECT
             attendance.runner_id AS runner_id,
-            MIN(runs.run_date) AS first_run_date
+            MIN(runs.run_date) AS first_run_date,
+            runs.run_id AS run_id
         FROM attendance
         JOIN runs
             ON runs.run_id = attendance.run_id
         GROUP BY attendance.runner_id
     ),
+
+        returning_cutoff_final AS (
+        SELECT
+            runner_id,
+            run_id,
+            date(first_run_date, '+30 days') AS returned_within_30_days_setup
+        FROM first_run_date_final
+    ),
+
     most_recent_run_date_final AS (
         SELECT
             attendance.runner_id AS runner_id,
@@ -168,12 +179,18 @@ runner_engagement = pd.read_sql("""
             ON runs.run_id = attendance.run_id
         GROUP BY attendance.runner_id
     )
+    
     SELECT
         runners.runner_id AS runner_id,
         runners.runner_name AS runner_name,
         COALESCE(attendance_count_setup.attendance_count, 0) AS attendance_count,
         first_run_date_final.first_run_date AS first_run_date,
-        most_recent_run_date_final.most_recent_run_date AS most_recent_run_date
+        most_recent_run_date_final.most_recent_run_date AS most_recent_run_date,
+        CASE
+            WHEN most_recent_run_date_final.most_recent_run_date <= returning_cutoff_final.returned_within_30_days_setup
+            THEN 1
+            ELSE 0
+        END AS returned_within_30_days
     FROM runners
     LEFT JOIN attendance_count_setup
         ON runners.runner_id = attendance_count_setup.runner_id
@@ -181,8 +198,9 @@ runner_engagement = pd.read_sql("""
         ON runners.runner_id = first_run_date_final.runner_id
     LEFT JOIN most_recent_run_date_final
         ON runners.runner_id = most_recent_run_date_final.runner_id
+    LEFT JOIN returning_cutoff_final
+        ON runners.runner_id = returning_cutoff_final.runner_id
 """, conn)
-
 runner_engagement.to_sql("runner_engagement", conn, if_exists='replace',index=False)
 
 conn.commit()
